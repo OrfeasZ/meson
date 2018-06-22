@@ -720,7 +720,13 @@ class Vs2010Backend(backends.Backend):
         if '/INCREMENTAL:NO' in buildtype_link_args:
             ET.SubElement(type_config, 'LinkIncremental').text = 'false'
         # CRT type; debug or release
-        if '/MDd' in buildtype_args:
+        if '/MTd' in buildtype_args:
+            ET.SubElement(type_config, 'UseDebugLibraries').text = 'true'
+            ET.SubElement(type_config, 'RuntimeLibrary').text = 'MultiThreadedDebug'
+        elif '/MT' in buildtype_args:
+            ET.SubElement(type_config, 'UseDebugLibraries').text = 'false'
+            ET.SubElement(type_config, 'RuntimeLibrary').text = 'MultiThreaded'
+        elif '/MDd' in buildtype_args:
             ET.SubElement(type_config, 'UseDebugLibraries').text = 'true'
             ET.SubElement(type_config, 'RuntimeLibrary').text = 'MultiThreadedDebugDLL'
         else:
@@ -749,6 +755,26 @@ class Vs2010Backend(backends.Backend):
             ET.SubElement(type_config, 'Optimization').text = 'MinSpace'
         elif '/Od' in o_flags:
             ET.SubElement(type_config, 'Optimization').text = 'Disabled'
+        # Mutli-process compilation
+        if '/MP' in buildtype_args:
+            ET.SubElement(type_config, 'MultiProcessorCompilation').text = 'true'
+        # String pooling
+        if '/GF' in buildtype_args:
+            ET.SubElement(type_config, 'StringPooling').text = 'true'
+        elif '/GF-' in buildtype_args:
+            ET.SubElement(type_config, 'StringPooling').text = 'false'
+        # RTTI
+        if '/GR' in buildtype_args:
+            ET.SubElement(type_config, 'RuntimeTypeInfo').text = 'true'
+        elif '/GR-' in buildtype_args:
+            ET.SubElement(type_config, 'RuntimeTypeInfo').text = 'false'
+        # Exception Handling
+        if '/EHa' in buildtype_args:
+            ET.SubElement(type_config, 'ExceptionHandling').text = 'Async'
+        elif '/EHsc' in buildtype_args:
+            ET.SubElement(type_config, 'ExceptionHandling').text = 'Sync'
+        elif '/EHs' in buildtype_args:
+            ET.SubElement(type_config, 'ExceptionHandling').text = 'SyncCThrow'
         # End configuration
         ET.SubElement(root, 'Import', Project='$(VCTargetsPath)\Microsoft.Cpp.props')
         generated_files, custom_target_output_files, generated_files_include_dirs = self.generate_custom_generator_commands(target, root)
