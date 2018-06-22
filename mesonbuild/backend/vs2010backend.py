@@ -928,23 +928,12 @@ class Vs2010Backend(backends.Backend):
                     target_args.append(arg)
 
         languages += gen_langs
-        if len(target_args) > 0:
-            target_args.append('%(AdditionalOptions)')
-            ET.SubElement(clconf, "AdditionalOptions").text = ' '.join(target_args)
 
-        target_inc_dirs.append('%(AdditionalIncludeDirectories)')
-        ET.SubElement(clconf, 'AdditionalIncludeDirectories').text = ';'.join(target_inc_dirs)
-        target_defines.append('%(PreprocessorDefinitions)')
-        ET.SubElement(clconf, 'PreprocessorDefinitions').text = ';'.join(target_defines)
-        ET.SubElement(clconf, 'MinimalRebuild').text = 'true'
-        ET.SubElement(clconf, 'FunctionLevelLinking').text = 'true'
-        pch_node = ET.SubElement(clconf, 'PrecompiledHeader')
-        # Warning level
-        warning_level = self.get_option_for_target('warning_level', target)
-        ET.SubElement(clconf, 'WarningLevel').text = 'Level' + str(1 + int(warning_level))
-        if self.get_option_for_target('werror', target):
-            ET.SubElement(clconf, 'TreatWarningAsError').text = 'true'
+        self.gen_vcxproj_clconfig(root, down, target, clconf, file_inc_dirs, target_inc_dirs,
+                                  file_defines, target_defines, target_args, proj_to_src_dir, compiler)
+
         # Note: SuppressStartupBanner is /NOLOGO and is 'true' by default
+        pch_node = ET.SubElement(clconf, 'PrecompiledHeader')
         pch_sources = {}
         for lang in ['c', 'cpp']:
             pch = target.get_pch(lang)
@@ -1089,52 +1078,15 @@ class Vs2010Backend(backends.Backend):
         else:
             raise MesonException('Unsupported Visual Studio target machine: ' + targetmachine)
 
+        # Generate include definitions
         extra_files = target.extra_files
-        if len(headers) + len(gen_hdrs) + len(extra_files) > 0:
-            inc_hdrs = ET.SubElement(root, 'ItemGroup')
-            for h in headers:
-                relpath = os.path.join(down, h.rel_to_builddir(self.build_to_src))
-                ET.SubElement(inc_hdrs, 'CLInclude', Include=relpath)
-            for h in gen_hdrs:
-                ET.SubElement(inc_hdrs, 'CLInclude', Include=h)
-            for h in target.extra_files:
-                relpath = os.path.join(down, h.rel_to_builddir(self.build_to_src))
-                ET.SubElement(inc_hdrs, 'CLInclude', Include=relpath)
+        self.gen_vcxproj_includes(root, down, target, headers, gen_hdrs, extra_files)
 
-        if len(sources) + len(gen_src) + len(pch_sources) > 0:
-            inc_src = ET.SubElement(root, 'ItemGroup')
-            for s in sources:
-                relpath = os.path.join(down, s.rel_to_builddir(self.build_to_src))
-                inc_cl = ET.SubElement(inc_src, 'CLCompile', Include=relpath)
-                lang = Vs2010Backend.lang_from_source_file(s)
-                self.add_pch(inc_cl, proj_to_src_dir, pch_sources, s)
-                self.add_additional_options(lang, inc_cl, file_args)
-                self.add_preprocessor_defines(lang, inc_cl, file_defines)
-                self.add_include_dirs(lang, inc_cl, file_inc_dirs)
-                ET.SubElement(inc_cl, 'ObjectFileName').text = "$(IntDir)" + self.object_filename_from_source(target, s)
-            for s in gen_src:
-                inc_cl = ET.SubElement(inc_src, 'CLCompile', Include=s)
-                lang = Vs2010Backend.lang_from_source_file(s)
-                self.add_pch(inc_cl, proj_to_src_dir, pch_sources, s)
-                self.add_additional_options(lang, inc_cl, file_args)
-                self.add_preprocessor_defines(lang, inc_cl, file_defines)
-                self.add_include_dirs(lang, inc_cl, file_inc_dirs)
-            for lang in pch_sources:
-                header, impl, suffix = pch_sources[lang]
-                if impl:
-                    relpath = os.path.join(proj_to_src_dir, impl)
-                    inc_cl = ET.SubElement(inc_src, 'CLCompile', Include=relpath)
-                    pch = ET.SubElement(inc_cl, 'PrecompiledHeader')
-                    pch.text = 'Create'
-                    pch_out = ET.SubElement(inc_cl, 'PrecompiledHeaderOutputFile')
-                    pch_out.text = '$(IntDir)$(TargetName)-%s.pch' % suffix
-                    pch_file = ET.SubElement(inc_cl, 'PrecompiledHeaderFile')
-                    # MSBuild searches for the header relative from the implementation, so we have to use
-                    # just the file name instead of the relative path to the file.
-                    pch_file.text = os.path.basename(header)
-                    self.add_additional_options(lang, inc_cl, file_args)
-                    self.add_preprocessor_defines(lang, inc_cl, file_defines)
-                    self.add_include_dirs(lang, inc_cl, file_inc_dirs)
+        # Generate compile definitions
+        self.gen_vcxproj_compile(root, down, target, file_args, file_defines, file_inc_dirs, proj_to_src_dir, sources, gen_src, pch_sources)
+
+        # Generate vcxproj filter file to represent a proper directory structure
+        self.gen_vcxproj_filters(down, ofname, sources, gen_src, pch_sources, headers, gen_hdrs, extra_files)
 
         if self.has_objects(objects, additional_objects, gen_objs):
             inc_objs = ET.SubElement(root, 'ItemGroup')
@@ -1145,11 +1097,163 @@ class Vs2010Backend(backends.Backend):
                 ET.SubElement(inc_objs, 'Object', Include=s)
             self.add_generated_objects(inc_objs, gen_objs)
 
+        self.gen_vcxproj_footer(root, down, target)
+        self._prettyprint_vcxproj_xml(ET.ElementTree(root), ofname)
+
+    def get_filter_path_details(self, f, down):
+        directories = set()
+
+        dirname = str(os.path.dirname(f.fname).replace('/', '\\'))
+        dir_parts = dirname.split('\\')
+
+        for i in range(0, len(dir_parts)):
+            parts = []
+
+            for j in range(0, i + 1):
+                parts.append(dir_parts[j])
+
+            if len(parts) == 0:
+                continue
+
+            directories.add('\\'.join(parts))
+
+        relpath = os.path.join(down, f.rel_to_builddir(self.build_to_src))
+
+        return directories, dirname, relpath
+
+    def gen_vcxproj_filters(self, down, ofname, sources, gen_src, pch_sources, headers, gen_hdrs, extra_files):
+        root = ET.Element('Project', {'DefaultTargets': "Build",
+                                      'ToolsVersion': '4.0',
+                                      'xmlns': 'http://schemas.microsoft.com/developer/msbuild/2003'})
+
+        filters = ET.SubElement(root, 'ItemGroup')
+        items = ET.SubElement(root, 'ItemGroup')
+
+        # Collect all directory and file names
+        directories = set()
+        files = {}
+        build_files = {}
+
+        for h in headers:
+            dirs, dirname, relpath = self.get_filter_path_details(h, down)
+            directories = directories.union(dirs)
+            files[relpath] = dirname
+
+        # TODO: Generated headers
+
+        for h in extra_files:
+            dirs, dirname, relpath = self.get_filter_path_details(h, down)
+            directories = directories.union(dirs)
+            files[relpath] = dirname
+
+        for s in sources:
+            dirs, dirname, relpath = self.get_filter_path_details(s, down)
+            directories = directories.union(dirs)
+            build_files[relpath] = dirname
+
+        # TODO: Generated sources
+        # TODO: PCH sources
+
+        for d in directories:
+            if len(d) == 0:
+                continue
+
+            guid = str(uuid.uuid4()).upper()
+            filter = ET.SubElement(filters, 'Filter', Include=d)
+            ET.SubElement(filter, 'UniqueIdentifier').text = '{%s}' % guid
+
+        for f in files:
+            item = ET.SubElement(items, 'CLInclude', Include=f)
+            ET.SubElement(item, 'Filter').text = files[f]
+
+        for f in build_files:
+            item = ET.SubElement(items, 'CLCompile', Include=f)
+            ET.SubElement(item, 'Filter').text = build_files[f]
+
+        self._prettyprint_vcxproj_xml(ET.ElementTree(root), ofname + '.filters')
+
+    def gen_vcxproj_clconfig(self, root, down, target, clconf, file_inc_dirs, target_inc_dirs,
+                             file_defines, target_defines, target_args, proj_to_src_dir, compiler):
+        if len(target_args) > 0:
+            target_args.append('%(AdditionalOptions)')
+            ET.SubElement(clconf, "AdditionalOptions").text = ' '.join(target_args)
+
+        target_inc_dirs.append('%(AdditionalIncludeDirectories)')
+        ET.SubElement(clconf, 'AdditionalIncludeDirectories').text = ';'.join(target_inc_dirs)
+        target_defines.append('%(PreprocessorDefinitions)')
+        ET.SubElement(clconf, 'PreprocessorDefinitions').text = ';'.join(target_defines)
+        ET.SubElement(clconf, 'MinimalRebuild').text = 'true'
+        ET.SubElement(clconf, 'FunctionLevelLinking').text = 'true'
+
+        # Warning level
+        warning_level = self.get_option_for_target('warning_level', target)
+        ET.SubElement(clconf, 'WarningLevel').text = 'Level' + str(1 + int(warning_level))
+        if self.get_option_for_target('werror', target):
+            ET.SubElement(clconf, 'TreatWarningAsError').text = 'true'
+
+    def gen_vcxproj_footer(self, root, down, target):
         ET.SubElement(root, 'Import', Project='$(VCTargetsPath)\Microsoft.Cpp.targets')
+
         # Reference the regen target.
         regen_vcxproj = os.path.join(self.environment.get_build_dir(), 'REGEN.vcxproj')
         self.add_project_reference(root, regen_vcxproj, self.environment.coredata.regen_guid)
-        self._prettyprint_vcxproj_xml(ET.ElementTree(root), ofname)
+
+    def gen_vcxproj_includes(self, root, down, target, headers, gen_hdrs, extra_files):
+        if len(headers) + len(gen_hdrs) + len(extra_files) == 0:
+            return
+
+        inc_hdrs = ET.SubElement(root, 'ItemGroup')
+        for h in headers:
+            relpath = os.path.join(down, h.rel_to_builddir(self.build_to_src))
+            ET.SubElement(inc_hdrs, 'CLInclude', Include=relpath)
+
+        for h in gen_hdrs:
+            ET.SubElement(inc_hdrs, 'CLInclude', Include=h)
+
+        for h in extra_files:
+            relpath = os.path.join(down, h.rel_to_builddir(self.build_to_src))
+            ET.SubElement(inc_hdrs, 'CLInclude', Include=relpath)
+
+    def gen_vcxproj_compile(self, root, down, target, file_args, file_defines, file_inc_dirs, proj_to_src_dir, sources, gen_src, pch_sources):
+        if len(sources) + len(gen_src) + len(pch_sources) == 0:
+            return
+
+        inc_src = ET.SubElement(root, 'ItemGroup')
+        for s in sources:
+            relpath = os.path.join(down, s.rel_to_builddir(self.build_to_src))
+            inc_cl = ET.SubElement(inc_src, 'CLCompile', Include=relpath)
+            lang = Vs2010Backend.lang_from_source_file(s)
+            self.add_pch(inc_cl, proj_to_src_dir, pch_sources, s)
+            self.add_additional_options(lang, inc_cl, file_args)
+            self.add_preprocessor_defines(lang, inc_cl, file_defines)
+            self.add_include_dirs(lang, inc_cl, file_inc_dirs)
+            ET.SubElement(inc_cl, 'ObjectFileName').text = "$(IntDir)" + self.object_filename_from_source(target, s)
+
+        for s in gen_src:
+            inc_cl = ET.SubElement(inc_src, 'CLCompile', Include=s)
+            lang = Vs2010Backend.lang_from_source_file(s)
+            self.add_pch(inc_cl, proj_to_src_dir, pch_sources, s)
+            self.add_additional_options(lang, inc_cl, file_args)
+            self.add_preprocessor_defines(lang, inc_cl, file_defines)
+            self.add_include_dirs(lang, inc_cl, file_inc_dirs)
+
+        for lang in pch_sources:
+            header, impl, suffix = pch_sources[lang]
+            if impl:
+                relpath = os.path.join(proj_to_src_dir, impl)
+                inc_cl = ET.SubElement(inc_src, 'CLCompile', Include=relpath)
+                pch = ET.SubElement(inc_cl, 'PrecompiledHeader')
+                pch.text = 'Create'
+                pch_out = ET.SubElement(inc_cl, 'PrecompiledHeaderOutputFile')
+                pch_out.text = '$(IntDir)$(TargetName)-%s.pch' % suffix
+                pch_file = ET.SubElement(inc_cl, 'PrecompiledHeaderFile')
+                # MSBuild searches for the header relative from the implementation, so we have to use
+                # just the file name instead of the relative path to the file.
+                pch_file.text = os.path.basename(header)
+                self.add_additional_options(lang, inc_cl, file_args)
+                self.add_preprocessor_defines(lang, inc_cl, file_defines)
+                self.add_include_dirs(lang, inc_cl, file_inc_dirs)
+
 
     def gen_regenproj(self, project_name, ofname):
         root = ET.Element('Project', {'DefaultTargets': 'Build',

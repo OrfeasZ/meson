@@ -23,7 +23,7 @@ import ast
 import argparse
 
 version = '0.47.0.dev1'
-backendlist = ['ninja', 'vs', 'vs2010', 'vs2015', 'vs2017', 'xcode']
+backendlist = ['ninja', 'vs', 'vs2010', 'vs2015', 'vs2017', 'vshybrid', 'xcode']
 
 default_yielding = False
 
@@ -315,6 +315,14 @@ class CoreData:
                     'backend_startup_project',
                     'Default project to execute in Visual Studio',
                     '')
+
+        if backend_name == 'vshybrid':
+            self.backend_options['backend_max_links'] = \
+                UserIntegerOption(
+                    'backend_max_links',
+                    'Maximum number of linker processes to run or 0 for no '
+                    'limit',
+                    0, None, 0)
 
 
     def get_builtin_option(self, optname):

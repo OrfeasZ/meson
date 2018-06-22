@@ -2263,6 +2263,9 @@ to directly access options of other subprojects.''')
         elif backend == 'vs2017':
             from .backend import vs2017backend
             self.backend = vs2017backend.Vs2017Backend(self.build)
+        elif backend == 'vshybrid':
+            from .backend import vshybridbackend
+            self.backend = vshybridbackend.VsHybridBackend(self.build)
         elif backend == 'xcode':
             from .backend import xcodebackend
             self.backend = xcodebackend.XCodeBackend(self.build)
