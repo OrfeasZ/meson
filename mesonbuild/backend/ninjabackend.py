@@ -1553,8 +1553,11 @@ int dummy;
                 if compiler.can_linker_accept_rsp():
                     command_template = ''' command = {executable} @$out.rsp
  rspfile = $out.rsp
- rspfile_content = $ARGS  {output_args} $in $LINK_ARGS {cross_args} $aliasing
-'''
+ rspfile_content = $ARGS  {output_args} '''
+                    if compiler.get_id() == 'msvc':
+                        command_template += '$in_newline $LINK_ARGS {cross_args} $aliasing\n'
+                    else:
+                        command_template += '$in $LINK_ARGS {cross_args} $aliasing\n'
                 else:
                     command_template = ' command = {executable} $ARGS {output_args} $in $LINK_ARGS {cross_args} $aliasing\n'
                 command = command_template.format(
